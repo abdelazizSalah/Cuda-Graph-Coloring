@@ -32,8 +32,7 @@ def run_test_case(input_file):
         print(f"Input file '{input_file}' not found.")
 
 def main():
-    # Replace 'program.c' with the name of your C file
-    c_file = 'myImplementation.c'
+    c_file = 'sequentialImplementation.c'
 
     # Compile the C file
     if compile_c_file(c_file):

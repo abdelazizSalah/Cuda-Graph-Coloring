@@ -15,7 +15,7 @@ void printSolution(int color[])
 }
 
 /// O(N), where N is the number of nodes.
-bool checkNeighbours(const int graph[][100], const int *colours, int numberOfNodes, int currentNode, int currentColour)
+bool checkNeighbours( int** graph, const int *colours, int numberOfNodes, int currentNode, int currentColour)
 {
     /// iterate over all my neighbours
     for (int i = 0; i < numberOfNodes; i++)
@@ -27,7 +27,7 @@ bool checkNeighbours(const int graph[][100], const int *colours, int numberOfNod
     return true;
 }
 
-bool graphColouring(int graph[][100], int *colours, bool *visited, const int numberOfNodes, const int numberOfColours, int numberOfColouredNodes, int currentNode)
+bool graphColouring( int **graph, int *colours, bool *visited, const int numberOfNodes, const int numberOfColours, int numberOfColouredNodes, int currentNode)
 {
     /// base case
     if (numberOfColouredNodes == numberOfNodes)
