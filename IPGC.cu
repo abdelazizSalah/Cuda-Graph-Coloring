@@ -2,9 +2,6 @@
  *   CUDA C/C++ implementation for Parallel Graph Coloring for Manycore Architectures
  *   {@link https://ieeexplore.ieee.org/abstract/document/7516086}
  *
- *   @author Ashwin Joisa
- *   @author Shanthanu Rai
- *   @author Rohit MP
  */
 
 // Include header files
@@ -12,7 +9,7 @@
 #include <cuda.h>
 
 #define MAX_THREADS 1024
-#define CEIL(a, b) ((a - 1) / b + 1)
+#define CEIL(a, b) (((a - 1) / b) + 1)
 
 using namespace std;
 
@@ -39,11 +36,15 @@ void readGraph(int &nodeCount, int &edgeCount,
     vector<int> *adj = new vector<int>[nodeCount];
     for (int i = 0; i < edgeCount; i++) {
         cin >> u >> v;
+
+        /// undirected graph
+        /// unweighted graph
         adj[u].push_back(v);
         adj[v].push_back(u);
     }
 
     // Copy into compressed adjacency List
+    /// ghalebn de tre2a mn el toro2 el kont lesa mzakrha, fa eb2a check it //!TODO
     *adjacencyListPointers = new int[nodeCount +1];
     *adjacencyList = new int[2 * edgeCount +1];
     int pos = 0;
@@ -63,28 +64,37 @@ void readGraph(int &nodeCount, int &edgeCount,
 }
 
 
+/// we should revise the CSG representation again.
 __global__ void assignColoursKernel(int nodeCount, int *adjacencyList, int *adjacencyListPointers,
     int *device_colours, bool *device_conflicts, int maxDegree) {
 
+    /// each thread is assigned to one node.
     int node = blockIdx.x * blockDim.x + threadIdx.x;
+
+    /// if the node is out of the graph, or it is not conflicting, then return.
     if (node >= nodeCount || !device_conflicts[node])
         return;
 
-    int maxColours = maxDegree + 1;
+    int maxColours = maxDegree + 1; // ????
+
     // Create forbidden array of size maxDegree
     int *forbidden = new int[CEIL(maxColours + 1, 32)];
     if(forbidden == NULL)  {
         printf("Cuda Memory Full\n");
         return;
     }
+    /// initialize the forbidden array with zeros.
     memset(forbidden, 0, sizeof(int) * CEIL(maxColours + 1, 32));
 
+    /// following the top-down approach with CSRGraph representation like in BFS ...
+    /// mehtag afhm el loop de.
     for (int i = adjacencyListPointers[node]; i < adjacencyListPointers[node + 1]; i++) {
         int neighbour = adjacencyList[i];
-        int ind = device_colours[neighbour] % 32;
+        int ind = device_colours[neighbour] % 32; /// the stride.
         forbidden[device_colours[neighbour] / 32] |= (1<<ind);
     }
 
+    /// assign the first available color to the node, to minimize the number of used colours.
     for (int colour = 1; colour <= maxColours; ++colour) {
         int ind = colour % 32;
         if ((forbidden[colour / 32] & (1<<ind)) == 0) {
@@ -108,17 +118,26 @@ void assignColours(int nodeCount, int *adjacencyList, int *adjacencyListPointers
 __global__ void detectConflictsKernel(int nodeCount, int *adjacencyList, int *adjacencyListPointers,
     int *device_colours, bool *device_conflicts, bool *device_conflictExists) {
 
+    /// each thread is assigned to one node.
     int node = blockIdx.x * blockDim.x + threadIdx.x;
     if (node >= nodeCount)
         return;
 
+
     device_conflicts[node] = false;
 
-    for (int i = adjacencyListPointers[node]; i < adjacencyListPointers[node + 1]; i++){
-        int neighbour = adjacencyList[i];
+    /// following the top-down approach with CSRGraph representation like in BFS ... 
+
+    /// this is the CSR representation of the graph
+    for (int edge = adjacencyListPointers[node]; edge < adjacencyListPointers[node + 1]; edge++){
+        int neighbour = adjacencyList[edge];
+
+        /// if both me and my neighbour has the same color, then there is a conflict.
         if (device_colours[neighbour] == device_colours[node] && neighbour < node) {
             //conflict
             device_conflicts[node] = true;
+
+            /// we should apply another iteration.
             *device_conflictExists = true;
         }
     }
@@ -157,6 +176,7 @@ int *graphColouring(int nodeCount, int *device_adjacencyList, int *device_adjace
 
     // Initialize all nodes to invalid colour (0)
     memset(host_colours, 0, sizeof(int) * nodeCount);
+
     // Initialize all nodes into conflict
     memset(host_conflicts, true, sizeof(bool) * nodeCount);
 
@@ -211,6 +231,7 @@ int main(int argc, char *argv[]) {
 
     
     // Alocate device memory and copy
+    /// 2*edgeCount 34an bidirectional? 
     catchCudaError(cudaMalloc((void **)&device_adjacencyList, sizeof(int) * (2 * edgeCount + 1)), "Malloc5");
     catchCudaError(cudaMemcpy(device_adjacencyList, adjacencyList, sizeof(int) * (2 * edgeCount + 1), cudaMemcpyHostToDevice), "Memcpy11");
 

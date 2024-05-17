@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <omp.h>
 #include <stdbool.h>
+#include <time.h>
 // Number of vertices in the graph
 int V;
 
@@ -15,7 +16,7 @@ void printSolution(int color[])
 }
 
 /// O(N), where N is the number of nodes.
-bool checkNeighbours( int** graph, const int *colours, int numberOfNodes, int currentNode, int currentColour)
+bool checkNeighbours(int **graph, const int *colours, int numberOfNodes, int currentNode, int currentColour)
 {
     /// iterate over all my neighbours
     for (int i = 0; i < numberOfNodes; i++)
@@ -27,7 +28,7 @@ bool checkNeighbours( int** graph, const int *colours, int numberOfNodes, int cu
     return true;
 }
 
-bool graphColouring( int **graph, int *colours, bool *visited, const int numberOfNodes, const int numberOfColours, int numberOfColouredNodes, int currentNode)
+bool graphColouring(int **graph, int *colours, bool *visited, const int numberOfNodes, const int numberOfColours, int numberOfColouredNodes, int currentNode)
 {
     /// base case
     if (numberOfColouredNodes == numberOfNodes)
@@ -45,12 +46,12 @@ bool graphColouring( int **graph, int *colours, bool *visited, const int numberO
         {
             colours[currentNode] = i;
             if (graphColouring(graph, colours, visited, numberOfNodes, numberOfColours, numberOfColouredNodes + 1, currentNode + 1))
-            
+
                 /// here it is not a must that we should visit the neighbours in order like dfs, we can access nodes in any order
                 /// and we would get the same result assuming that the nodes are marked from 0 to N-1
                 /// so when I try to visit another node, I can just visit the node number n + 1.
                 return true;
-            
+
             /// apply backtracking, and try another colour.
             colours[currentNode] = 0;
         }
@@ -62,10 +63,12 @@ bool graphColouring( int **graph, int *colours, bool *visited, const int numberO
 
 int main()
 {
+    clock_t start, end;
+    double cpu_time_used;
 
     // printf("Enter Number of vertices\n");
     scanf("%d", &V);
-    int ** graph = (int**) malloc(V * sizeof(int*));
+    int **graph = (int **)malloc(V * sizeof(int *));
     if (graph == NULL)
     {
         printf("Memory allocation failed\n");
@@ -74,7 +77,7 @@ int main()
 
     for (int i = 0; i < V; i++)
     {
-        graph[i] = (int*) malloc(V * sizeof(int));
+        graph[i] = (int *)malloc(V * sizeof(int));
         if (graph[i] == NULL)
         {
             printf("Memory allocation failed\n");
@@ -104,7 +107,7 @@ int main()
     bool *visited = (bool *)malloc(V * sizeof(bool));
     for (int i = 0; i < V; i++)
         visited[i] = false;
-
+    start = clock();
     if (graphColouring(graph, color, visited, V, c, 0, 0) == true)
     {
         printSolution(color);
@@ -112,18 +115,20 @@ int main()
         free(color);
         free(visited);
         // Free the allocated memory
-        for (int i = 0; i < V; i++) 
+        for (int i = 0; i < V; i++)
             free(graph[i]);
-        
+
         free(graph);
+    end = clock();
+    cpu_time_used = ((double)(end - start)) * 1000 / CLOCKS_PER_SEC ;
+    printf("Time taken: %f ms\n", cpu_time_used);
         return 0;
     }
-
     printf("Solution does not exist\n");
     // Free the allocated memory
-    for (int i = 0; i < V; i++) 
+    for (int i = 0; i < V; i++)
         free(graph[i]);
-    
+
     free(graph);
     free(color);
     free(visited);
