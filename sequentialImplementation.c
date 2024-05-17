@@ -6,6 +6,8 @@
 // Number of vertices in the graph
 int V;
 
+// Number of edges
+
 void printSolution(int color[])
 {
     printf("Solution Exists:"
@@ -68,6 +70,8 @@ int main()
 
     // printf("Enter Number of vertices\n");
     scanf("%d", &V);
+    // printf("Enter Number of edges\n");
+    // scanf("%d", &V);
     int **graph = (int **)malloc(V * sizeof(int *));
     if (graph == NULL)
     {

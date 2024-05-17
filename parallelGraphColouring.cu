@@ -1,7 +1,7 @@
 /*
  * @author: Abdelaziz Salah
  * @author: Ahmed Hosny
- * @date: 17/5/2024
+ * @date: 30/4/2024
  */
 
 // Include header files
@@ -9,45 +9,51 @@
 #include <cuda.h>
 
 #define MAX_THREADS 1024
+/// (n-1) / total size + 1 equavilent to the ceil operation.
 #define CEIL(a, b) (((a - 1) / b) + 1)
-
+#define DEBUG 1
 using namespace std;
 
 float device_time_taken;
 
 // Catch Cuda errors
-void catchCudaError(cudaError_t error, const char *function)
+void catchCudaError(cudaError_t error, const char *operation_name)
 {
     if (error != cudaSuccess)
     {
-        printf("\n====== Cuda Error Code %i ======\n %s in CUDA %s\n", error, cudaGetErrorString(error), function);
+        printf("\n====== Cuda Error Code %i ======\n %s in CUDA %s\n", error, cudaGetErrorString(error), operation_name);
         exit(-1);
     }
 }
 
 // Host Memory
-void readGraph(int &nodeCount, int &edgeCount,
-               int &maxDegree, int **neighbours, int **srcPointers)
+void readGraphInCSRFormat(int &nodeCount, int &edgeCount,
+                          int &maxDegree, int **neighbours, int **srcPointers)
 {
-    int u, v;
     cin >> nodeCount >> edgeCount;
 
-    // Use vector of vectors temporarily to input graph
+    // read the vector as adjacency list, temporarly then remove it
     vector<int> *adj = new vector<int>[nodeCount];
+    int src, dest;
     for (int i = 0; i < edgeCount; i++)
     {
-        cin >> u >> v;
+        cin >> src >> dest;
 
         /// undirected graph
         /// unweighted graph
-        adj[u].push_back(v);
-        adj[v].push_back(u);
+        adj[src].push_back(dest);
+        adj[dest].push_back(src);
     }
 
     // Copy into compressed adjacency List
-    *srcPointers = new int[nodeCount + 1];    /// da bykun el soruce, by2uly kol source btbd2 fen w 3ndha kam neighbour
-    *neighbours = new int[2 * edgeCount + 1]; /// howa da el destination, byb2a gowaah el neighbours bto3 kol node
     /*
+        2 * edgeCount + 1, this is because:
+            1. the graph is symmetric
+            2. the graph in bidirectional
+            3. so when we say A-B, we need to reserve 2 cells,
+                one for A having B as its neighbour
+                and one for B having A as its neigbour.
+
         ie: CSR representation.
             srcPointers = {0,2,5,7,8} =>
                 node1 => has 2 neighbours
@@ -60,6 +66,9 @@ void readGraph(int &nodeCount, int &edgeCount,
                 neighbours of third node are 0,1
                 neigbours of fourth node are 1
     */
+    *srcPointers = new int[nodeCount + 1];    /// da bykun el soruce, by2uly kol source btbd2 fen w 3ndha kam neighbour
+    *neighbours = new int[2 * edgeCount + 1]; /// howa da el destination, byb2a gowaah el neighbours bto3 kol node
+
     /// filling the array with the correct nodes.
     int pos = 0;
     for (int i = 0; i < nodeCount; i++)
@@ -68,11 +77,17 @@ void readGraph(int &nodeCount, int &edgeCount,
         for (int node : adj[i])
             (*neighbours)[pos++] = node;
     }
+
     /// we append one extra cell at the end, to indicate the number of neighbours for the last node.
     (*srcPointers)[nodeCount] = pos;
 
     // Calculate max degree
-    /// 34an fl CSR, bnb2a 3auzen ne3rf men aktur row 3ndo non-zero elements.
+    /*
+        34an fl CSR, bnb2a 3auzen ne3rf men aktur row 3ndo non-zero elements.
+        w kman 34an according to By Vizing's theorem, 
+        the number of colors needed to color a simple graph is either its maximum degree Δ or Δ+1. 
+        It is gaurenteed if we have number of colours = to maxDegree + 1, we will find a solution
+    */
     maxDegree = INT_MIN;
     for (int i = 0; i < nodeCount; i++)
         maxDegree = max(maxDegree, (int)adj[i].size());
@@ -98,8 +113,11 @@ __global__ void assignColoursKernel(int nodeCount, int *neighbours, int *srcPoin
     /// 3dd el alwan el hn7tagha, msh hyb2a aktur mn el maxDegree,
     int maxColours = maxDegree + 1;
 
-    // Create forbidden array of size maxDegree
-    int *forbidden = new int[CEIL(maxColours + 1, 32)];
+    /// Create forbidden array of size maxDegree
+    /// this array indicates the forbidden colour, and I get them from my neighbours.
+    /// we use the bit-wise representation to save the memory, so we represent it in 32 bits.
+    int noOfColors = CEIL(maxColours + 1, 32);
+    int *forbidden = new int[noOfColors];
     if (forbidden == NULL)
     {
         printf("Cuda Memory Full\n");
@@ -107,21 +125,30 @@ __global__ void assignColoursKernel(int nodeCount, int *neighbours, int *srcPoin
     }
 
     /// initialize the forbidden array with zeros.
-    memset(forbidden, 0, sizeof(int) * CEIL(maxColours + 1, 32));
+    memset(forbidden, 0, sizeof(int) * noOfColors);
 
     /// following the top-down approach with CSRGraph representation like in BFS ...
     /// mehtag afhm el loop de.
     for (int i = srcPointers[node]; i < srcPointers[node + 1]; i++)
     {
+        /// get the neighbour
         int neighbour = neighbours[i];
-        int ind = device_colours[neighbour] % 32; /// the stride.
-        forbidden[device_colours[neighbour] / 32] |= (1 << ind);
+        
+        /// get the neighbour color 
+        int neiColor = device_colours[neighbour];
+
+        /// get its color and convert its index into the 32 bit representation. 
+        int ind =  neiColor % 32; /// the stride.
+
+        /// set this color as forbidden
+        forbidden[ neiColor / 32 ] |= (1 << ind);
     }
 
     /// assign the first available color to the node, to minimize the number of used colours.
     for (int colour = 1; colour <= maxColours; ++colour)
     {
         int ind = colour % 32;
+        /// if not forbidden, assign our color as this color.
         if ((forbidden[colour / 32] & (1 << ind)) == 0)
         {
             device_colours[node] = colour;
@@ -137,11 +164,14 @@ void assignColours(int nodeCount, int *neighbours, int *srcPointers,
 {
 
     // Launch assignColoursKernel with nodeCount number of threads
+    /*
+        Ceil of node count with Max_Threads, because we know that the one block can have up to 1024 threads. 
+        so we just define # of blocks to can handle the number of nodes in the array. 
+    */
     assignColoursKernel<<<CEIL(nodeCount, MAX_THREADS), MAX_THREADS>>>(nodeCount, neighbours, srcPointers,
                                                                        device_colours, device_conflicts, maxDegree);
     cudaDeviceSynchronize();
 }
-
 
 /*
     This is a vertex-centric approach
@@ -159,7 +189,6 @@ __global__ void detectConflictsKernel(int nodeCount, int *neighbours, int *srcPo
     device_conflicts[node] = false;
 
     /// following the top-down approach with CSRGraph representation like in BFS ...
-    /// this is the CSR representation of the graph
     for (int edge = srcPointers[node]; edge < srcPointers[node + 1]; edge++)
     {
         int neighbour = neighbours[edge];
@@ -172,6 +201,8 @@ __global__ void detectConflictsKernel(int nodeCount, int *neighbours, int *srcPo
 
             /// we should apply another iteration.
             *device_conflictExists = true;
+
+            /// continue to detect all conflicts, because we can work only on conflicting nodes, and this will save time.
         }
     }
 }
@@ -180,11 +211,12 @@ bool detectConflicts(int nodeCount, int *neighbours, int *srcPointers,
                      int *device_colours, bool *device_conflicts)
 {
 
+    /// this flag indicates that there are still some conflicts
     bool *device_conflictExists;
     bool conflictExists = false;
 
-    catchCudaError(cudaMalloc((void **)&device_conflictExists, sizeof(bool)), "Malloc1");
-    catchCudaError(cudaMemcpy(device_conflictExists, &conflictExists, sizeof(bool), cudaMemcpyHostToDevice), "Memcpy7");
+    catchCudaError(cudaMalloc((void **)&device_conflictExists, sizeof(bool)), "Malloc5");
+    catchCudaError(cudaMemcpy(device_conflictExists, &conflictExists, sizeof(bool), cudaMemcpyHostToDevice), "Memcpy5");
 
     // Launch detectConflictsKernel with nodeCount number of threads
     detectConflictsKernel<<<CEIL(nodeCount, MAX_THREADS), MAX_THREADS>>>(nodeCount, neighbours, srcPointers, device_colours, device_conflicts, device_conflictExists);
@@ -199,11 +231,18 @@ bool detectConflicts(int nodeCount, int *neighbours, int *srcPointers,
     return conflictExists;
 }
 
-int *graphColouring(int nodeCount, int *device_neighbours, int *device_srcPointers,
-                    int maxDegree)
+/*
+    This function returns the colours of the nodes.
+*/
+int * graphColouring(const int &nodeCount, int *device_neighbours, int *device_srcPointers,
+                    const int& maxDegree)
 {
 
-    // Boolean array for conflicts
+    /* 
+        These two arrays:
+            conflicts: if a node has a conflict color with one of its neighbours, 0 indicates invalid colour. 
+            colours: the colour of each node.
+    */
     bool *host_conflicts = new bool[nodeCount];
     int *host_colours = new int[nodeCount];
     int *device_colours;
@@ -215,10 +254,11 @@ int *graphColouring(int nodeCount, int *device_neighbours, int *device_srcPointe
     // Initialize all nodes into conflict
     memset(host_conflicts, true, sizeof(bool) * nodeCount);
 
-    catchCudaError(cudaMalloc((void **)&device_colours, sizeof(int) * nodeCount), "Malloc2");
-    catchCudaError(cudaMemcpy(device_colours, host_colours, sizeof(int) * nodeCount, cudaMemcpyHostToDevice), "Memcpy1");
-    catchCudaError(cudaMalloc((void **)&device_conflicts, sizeof(bool) * nodeCount), "Malloc3");
-    catchCudaError(cudaMemcpy(device_conflicts, host_conflicts, sizeof(bool) * nodeCount, cudaMemcpyHostToDevice), "Memcpy2");
+    catchCudaError(cudaMalloc((void **)&device_colours, sizeof(int) * nodeCount), "Malloc3");
+    catchCudaError(cudaMemcpy(device_colours, host_colours, sizeof(int) * nodeCount, cudaMemcpyHostToDevice), "Memcpy3");
+
+    catchCudaError(cudaMalloc((void **)&device_conflicts, sizeof(bool) * nodeCount), "Malloc4");
+    catchCudaError(cudaMemcpy(device_conflicts, host_conflicts, sizeof(bool) * nodeCount, cudaMemcpyHostToDevice), "Memcpy4");
 
     // Timer
     cudaEvent_t device_start, device_end;
@@ -237,7 +277,7 @@ int *graphColouring(int nodeCount, int *device_neighbours, int *device_srcPointe
     catchCudaError(cudaEventElapsedTime(&device_time_taken, device_start, device_end), "Elapsed time");
 
     // Copy colours to host and return
-    catchCudaError(cudaMemcpy(host_colours, device_colours, sizeof(int) * nodeCount, cudaMemcpyDeviceToHost), "Memcpy3");
+    catchCudaError(cudaMemcpy(host_colours, device_colours, sizeof(int) * nodeCount, cudaMemcpyDeviceToHost), "Memcpy7");
 
     delete[] host_conflicts;
     catchCudaError(cudaFree(device_colours), "Free");
@@ -256,38 +296,50 @@ int main(int argc, char *argv[])
         return 0;
     }
 
+    /// 1. define the variables
     int nodeCount, edgeCount, maxDegree;
+
+    /// these arrays for the GSR representation of the graph
+    //? Note that we do not need the value array, because we are working with unweighted graph, all ones.
     int *neighbours = NULL, *srcPointers = NULL;
+
+    /// these for the GPU memory
     int *device_neighbours, *device_srcPointers;
 
-    char choice = 'y';
-    // cout << "Would you like to print the colouring of the graph? (y/n) ";
-    // cin >> choice;
-
+    /// 2. reading the graph.
     freopen(argv[1], "r", stdin);
-    readGraph(nodeCount, edgeCount, maxDegree, &neighbours, &srcPointers);
+    readGraphInCSRFormat(nodeCount, edgeCount, maxDegree, &neighbours, &srcPointers);
+
+    // 3. Alocate device memory and copy them there.
+    /*
+        2 * edgeCount + 1, this is because:
+            1. the graph is symmetric
+            2. the graph in bidirectional
+            3. so when we say A-B, we need to reserve 2 cells,
+                one for A having B as its neighbour
+                and one for B having A as its neigbour.
+    */
+    catchCudaError(cudaMalloc((void **)&device_neighbours, sizeof(int) * (2 * edgeCount + 1)), "Malloc1");
+    catchCudaError(cudaMemcpy(device_neighbours, neighbours, sizeof(int) * (2 * edgeCount + 1), cudaMemcpyHostToDevice), "Memcpy1");
 
     // Alocate device memory and copy
-    /// 2*edgeCount 34an bidirectional?
-    catchCudaError(cudaMalloc((void **)&device_neighbours, sizeof(int) * (2 * edgeCount + 1)), "Malloc5");
-    catchCudaError(cudaMemcpy(device_neighbours, neighbours, sizeof(int) * (2 * edgeCount + 1), cudaMemcpyHostToDevice), "Memcpy11");
+    /// +1 to know how many neighbours for the last node.
+    catchCudaError(cudaMalloc((void **)&device_srcPointers, sizeof(int) * (nodeCount + 1)), "Malloc2");
+    catchCudaError(cudaMemcpy(device_srcPointers, srcPointers, sizeof(int) * (nodeCount + 1), cudaMemcpyHostToDevice), "Memcpy2");
 
-    // Alocate device memory and copy
-    catchCudaError(cudaMalloc((void **)&device_srcPointers, sizeof(int) * (nodeCount + 1)), "Malloc6");
-    catchCudaError(cudaMemcpy(device_srcPointers, srcPointers, sizeof(int) * (nodeCount + 1), cudaMemcpyHostToDevice), "Memcpy12");
-
+    /// 4. call the graph coloring function, which calls the kernel.
     int *colouring = graphColouring(nodeCount, device_neighbours, device_srcPointers, maxDegree);
 
+    /// 5. printing the results if there is a result.
     int chromaticNumber = INT_MIN;
     for (int i = 0; i < nodeCount; i++)
     {
         chromaticNumber = max(chromaticNumber, colouring[i]);
-        if (choice == 'y' || choice == 'Y')
-            printf("Node %d => Colour %d\n", i, colouring[i]);
+        printf("Node %d => Colour %d\n", i, colouring[i]);
     }
     cout << endl;
-    printf("\nNumber of colours used (chromatic number) ==> %d\n", chromaticNumber);
-    printf("Time Taken (Parallel) = %f ms\n", device_time_taken);
+    printf("\nminimum number of colors is:  ==> %d\n", chromaticNumber);
+    printf("Time Taken = %f ms\n", device_time_taken);
 
     /// writing the result into output file
     if (argc == 3)
@@ -298,24 +350,28 @@ int main(int argc, char *argv[])
         cout << endl;
     }
 
-    // Check for correctness
-    int count = 0;
-    for (int u = 0; u < nodeCount; u++)
+    if (DEBUG)
     {
-        for (int j = srcPointers[u]; j < srcPointers[u + 1]; j++)
+        // Check for correctness
+        /// just to make sure that our kernal is working well
+        int count = 0;
+        for (int u = 0; u < nodeCount; u++)
         {
-            int v = neighbours[j];
-            if (colouring[u] == colouring[v] && u <= v)
+            for (int j = srcPointers[u]; j < srcPointers[u + 1]; j++)
             {
-                if (count <= 10)
+                int v = neighbours[j];
+                if (colouring[u] == colouring[v] && u <= v)
+                {
+                    // if (count <= 10)
                     cout << "Conflicting color found at nodes " << u << " and " << v << endl;
-                count++;
+                    count++;
+                }
             }
         }
+        cout << "Found total " << count << " conflicts!" << endl;
     }
-    cout << "Found total " << count << " conflicts!" << endl;
 
-    // Free all memory
+    /// 6. Free all memory
     delete[] colouring, neighbours, srcPointers;
     catchCudaError(cudaFree(device_neighbours), "Free");
     catchCudaError(cudaFree(device_srcPointers), "Free");
