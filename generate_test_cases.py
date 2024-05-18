@@ -1,8 +1,10 @@
 import numpy as np
 
 # Number of nodes and edges
-num_nodes = 100
-num_edges = 200
+# num_nodes = 10
+# num_edges = 50
+num_nodes = int(input("Enter the number of nodes: "))
+num_edges  = int(input("Enter the number of edges: "))
 
 # Generate random edges
 edges = np.random.choice(num_nodes, size=(num_edges, 2))
@@ -25,7 +27,7 @@ for edge in edges:
 
 # Print adjacency matrix
 print("Adjacency Matrix:")
-with open('test_cases/100NodesTestCase.txt', 'w') as f:
+with open(f'test_cases/{num_nodes}NodesTestCase.txt', 'w') as f:
     # f.write("Adjacency Matrix:\n")
     # np.savetxt(f, adj_matrix, fmt='%d')
     f.write(f"{num_nodes}\n")
@@ -33,14 +35,15 @@ with open('test_cases/100NodesTestCase.txt', 'w') as f:
         for val in row:
             f.write(f"{val} ")
         f.write("\n")
+    
+    f.write(f"{num_nodes}")
 
 # Print adjacency list
 print("\nAdjacency List:")
 
-with open('test_cases/adjacencyListTestCases/100NodesTestCase.txt', 'w') as f:
+with open(f'test_cases/adjacencyListTestCases/{num_nodes}NodesTestCase.txt', 'w') as f:
     f.write(f"{num_nodes} {2 * num_edges}\n")
     for i, neighbors in enumerate(adj_list):
         for nei in neighbors:
             f.write(f"{i} {nei} \n")
-        # f.write("\n")
-print("use the number of colors generated in the parallel")
+# print("use the number of colors generated in the parallel")

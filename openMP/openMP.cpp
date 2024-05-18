@@ -182,6 +182,6 @@ int main()
         cout << "color " << i << ": " << colors[i] << endl;
     }
     cout << "Time is :" << overhead * 10000 << " ms" << endl;
-    cout << "Number of colors used are: " << set<int>(colors.begin(), colors.end()).size(); 
+    // cout << "Number of colors used are: " << set<int>(colors.begin(), colors.end()).size();
     checker(colors, edges);
 }
