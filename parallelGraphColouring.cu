@@ -206,7 +206,8 @@ __global__ void detectConflictsKernel(int nodeCount, int *neighbours, int *srcPo
             /// we should apply another iteration.
             *device_conflictExists = true;
 
-            /// continue to detect all conflicts, because we can work only on conflicting nodes, and this will save time.
+            /// once you find a conflict, you can exit
+            break;
         }
     }
 }
