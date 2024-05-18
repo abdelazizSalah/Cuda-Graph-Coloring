@@ -116,7 +116,9 @@ __global__ void assignColoursKernel(int nodeCount, int *neighbours, int *srcPoin
     /// Create forbidden array of size maxDegree
     /// this array indicates the forbidden colour, and I get them from my neighbours.
     /// we use the bit-wise representation to save the memory, so we represent it in 32 bits.
-    int noOfColors = CEIL(maxColours + 1, 32);
+    /// this also apply the privitization concept.
+    // int noOfColors = CEIL(maxColours + 1, 32);
+    int noOfColors = maxColours + 1; 
     int *forbidden = new int[noOfColors];
     if (forbidden == NULL)
     {
@@ -138,18 +140,20 @@ __global__ void assignColoursKernel(int nodeCount, int *neighbours, int *srcPoin
         int neiColor = device_colours[neighbour];
 
         /// get its color and convert its index into the 32 bit representation. 
-        int ind =  neiColor % 32; /// the stride.
+        // int ind =  neiColor % 32; /// the stride.
+        int ind =  neiColor; /// the stride.
 
         /// set this color as forbidden
-        forbidden[ neiColor / 32 ] |= (1 << ind);
+        forbidden[ neiColor ] |= (1 << ind);
     }
 
     /// assign the first available color to the node, to minimize the number of used colours.
     for (int colour = 1; colour <= maxColours; ++colour)
     {
-        int ind = colour % 32;
+        // int ind = colour % 32;
+        int ind = colour;
         /// if not forbidden, assign our color as this color.
-        if ((forbidden[colour / 32] & (1 << ind)) == 0)
+        if ((forbidden[colour] & (1 << ind)) == 0)
         {
             device_colours[node] = colour;
             break;
