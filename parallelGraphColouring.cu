@@ -84,8 +84,8 @@ void readGraphInCSRFormat(int &nodeCount, int &edgeCount,
     // Calculate max degree
     /*
         34an fl CSR, bnb2a 3auzen ne3rf men aktur row 3ndo non-zero elements.
-        w kman 34an according to By Vizing's theorem, 
-        the number of colors needed to color a simple graph is either its maximum degree Δ or Δ+1. 
+        w kman 34an according to By Vizing's theorem,
+        the number of colors needed to color a simple graph is either its maximum degree Δ or Δ+1.
         It is gaurenteed if we have number of colours = to maxDegree + 1, we will find a solution
     */
     maxDegree = INT_MIN;
@@ -118,7 +118,7 @@ __global__ void assignColoursKernel(int nodeCount, int *neighbours, int *srcPoin
     /// we use the bit-wise representation to save the memory, so we represent it in 32 bits.
     /// this also apply the privitization concept.
     // int noOfColors = CEIL(maxColours + 1, 32);
-    int noOfColors = maxColours + 1; 
+    int noOfColors = maxColours + 1;
     int *forbidden = new int[noOfColors];
     if (forbidden == NULL)
     {
@@ -135,16 +135,16 @@ __global__ void assignColoursKernel(int nodeCount, int *neighbours, int *srcPoin
     {
         /// get the neighbour
         int neighbour = neighbours[i];
-        
-        /// get the neighbour color 
+
+        /// get the neighbour color
         int neiColor = device_colours[neighbour];
 
-        /// get its color and convert its index into the 32 bit representation. 
+        /// get its color and convert its index into the 32 bit representation.
         // int ind =  neiColor % 32; /// the stride.
-        int ind =  neiColor; /// the stride.
+        int ind = neiColor; /// the stride.
 
         /// set this color as forbidden
-        forbidden[ neiColor ] |= (1 << ind);
+        forbidden[neiColor] |= (1 << ind);
     }
 
     /// assign the first available color to the node, to minimize the number of used colours.
@@ -164,16 +164,16 @@ __global__ void assignColoursKernel(int nodeCount, int *neighbours, int *srcPoin
 }
 
 void assignColours(int nodeCount, int *neighbours, int *srcPointers,
-                   int *device_colours, bool *device_conflicts, int maxDegree)
+                   int *device_colours, bool *device_conflicts, int maxDegree, cudaStream_t stream)
 {
 
     // Launch assignColoursKernel with nodeCount number of threads
     /*
-        Ceil of node count with Max_Threads, because we know that the one block can have up to 1024 threads. 
-        so we just define # of blocks to can handle the number of nodes in the array. 
+        Ceil of node count with Max_Threads, because we know that the one block can have up to 1024 threads.
+        so we just define # of blocks to can handle the number of nodes in the array.
     */
-    assignColoursKernel<<<CEIL(nodeCount, MAX_THREADS), MAX_THREADS>>>(nodeCount, neighbours, srcPointers,
-                                                                       device_colours, device_conflicts, maxDegree);
+    assignColoursKernel<<<CEIL(nodeCount, MAX_THREADS), MAX_THREADS, 0, stream>>>(nodeCount, neighbours, srcPointers,
+                                                                                  device_colours, device_conflicts, maxDegree);
     cudaDeviceSynchronize();
 }
 
@@ -212,7 +212,7 @@ __global__ void detectConflictsKernel(int nodeCount, int *neighbours, int *srcPo
 }
 
 bool detectConflicts(int nodeCount, int *neighbours, int *srcPointers,
-                     int *device_colours, bool *device_conflicts)
+                     int *device_colours, bool *device_conflicts, cudaStream_t stream)
 {
 
     /// this flag indicates that there are still some conflicts
@@ -223,7 +223,7 @@ bool detectConflicts(int nodeCount, int *neighbours, int *srcPointers,
     catchCudaError(cudaMemcpy(device_conflictExists, &conflictExists, sizeof(bool), cudaMemcpyHostToDevice), "Memcpy5");
 
     // Launch detectConflictsKernel with nodeCount number of threads
-    detectConflictsKernel<<<CEIL(nodeCount, MAX_THREADS), MAX_THREADS>>>(nodeCount, neighbours, srcPointers, device_colours, device_conflicts, device_conflictExists);
+    detectConflictsKernel<<<CEIL(nodeCount, MAX_THREADS), MAX_THREADS, 0, stream>>>(nodeCount, neighbours, srcPointers, device_colours, device_conflicts, device_conflictExists);
     cudaDeviceSynchronize();
 
     // Copy device_conflictExists to conflictExists and return
@@ -238,17 +238,24 @@ bool detectConflicts(int nodeCount, int *neighbours, int *srcPointers,
 /*
     This function returns the colours of the nodes.
 */
-int * graphColouring(const int &nodeCount, int *device_neighbours, int *device_srcPointers,
-                    const int& maxDegree)
+int *graphColouring(const int &nodeCount, int *device_neighbours, int *device_srcPointers,
+                    const int &maxDegree)
 {
 
-    /* 
+    /*
         These two arrays:
-            conflicts: if a node has a conflict color with one of its neighbours, 0 indicates invalid colour. 
+            conflicts: if a node has a conflict color with one of its neighbours, 0 indicates invalid colour.
             colours: the colour of each node.
     */
-    bool *host_conflicts = new bool[nodeCount];
-    int *host_colours = new int[nodeCount];
+    // bool *host_conflicts = new bool[nodeCount];
+    // int *host_colours = new int[nodeCount];
+
+    /// pinned memory
+    bool *host_conflicts;
+    int *host_colours;
+    catchCudaError(cudaMallocHost((void **)&host_conflicts, sizeof(bool) * nodeCount), "MallocHost1");
+    catchCudaError(cudaMallocHost((void **)&host_colours, sizeof(int) * nodeCount), "MallocHost2");
+
     int *device_colours;
     bool *device_conflicts;
 
@@ -258,34 +265,80 @@ int * graphColouring(const int &nodeCount, int *device_neighbours, int *device_s
     // Initialize all nodes into conflict
     memset(host_conflicts, true, sizeof(bool) * nodeCount);
 
+    //! Applying streaming :)
+    /// 1. define the number of streams needed
+    unsigned int numStreams = 8; // this number can be changed later.
+
+    /// 2. create an array of streams
+    cudaStream_t streams[numStreams];
+
+    /// 3. allocate them
+    for (unsigned int s = 0; s < numStreams; s++)
+        cudaStreamCreate(&streams[s]);
+
+    /// 4. stream the segments
+    unsigned int numSegments = numStreams;
+    unsigned int segmentSize = CEIL(nodeCount, numSegments);
+
+    //? we need to avoid duplicate allocation, later I will insert this inside the function, and make the allocation
+    //? depends on the segment, but for now, lets keep it outside
     catchCudaError(cudaMalloc((void **)&device_colours, sizeof(int) * nodeCount), "Malloc3");
-    catchCudaError(cudaMemcpy(device_colours, host_colours, sizeof(int) * nodeCount, cudaMemcpyHostToDevice), "Memcpy3");
-
     catchCudaError(cudaMalloc((void **)&device_conflicts, sizeof(bool) * nodeCount), "Malloc4");
-    catchCudaError(cudaMemcpy(device_conflicts, host_conflicts, sizeof(bool) * nodeCount, cudaMemcpyHostToDevice), "Memcpy4");
-
-    // Timer
-    cudaEvent_t device_start, device_end;
-    catchCudaError(cudaEventCreate(&device_start), "Event Create");
-    catchCudaError(cudaEventCreate(&device_end), "Event Create");
-    catchCudaError(cudaEventRecord(device_start), "Event Record");
-
-    do
+    /// 5. loop over the segments
+    for (unsigned int s = 0; s < numSegments; s++)
     {
-        assignColours(nodeCount, device_neighbours, device_srcPointers, device_colours, device_conflicts, maxDegree);
-    } while (detectConflicts(nodeCount, device_neighbours, device_srcPointers, device_colours, device_conflicts));
+        /// to avoid exceeding the memory, and causing errors.
+        if (s * segmentSize >= nodeCount)
+            break;
 
-    // Timer
-    catchCudaError(cudaEventRecord(device_end), "Event Record");
-    catchCudaError(cudaEventSynchronize(device_end), "Event Synchronize");
-    catchCudaError(cudaEventElapsedTime(&device_time_taken, device_start, device_end), "Elapsed time");
+        /// 6. Find the segment bound
+        unsigned int startSegmentIdx = s * segmentSize;
 
-    // Copy colours to host and return
-    catchCudaError(cudaMemcpy(host_colours, device_colours, sizeof(int) * nodeCount, cudaMemcpyDeviceToHost), "Memcpy7");
+        /// we must make sure that we have handeled the last segment correctly,
+        /// so if the start + segment size > nodeCount, just make the end = nodeCount
+        /// this implies that all segments can have same size except the last which can have smaller size.
+        unsigned int endSegmentIdx = (startSegmentIdx + segmentSize < nodeCount) ? startSegmentIdx + segmentSize : nodeCount;
+
+        /// get the segment size
+        unsigned int Nsegment = endSegmentIdx - startSegmentIdx; // + 1 => ignore the last element.
+
+        /// device_colours[startSegmentIdx] means that I want to startSegmentIdx copying from the address of the segment
+        catchCudaError(cudaMemcpyAsync(&device_colours[startSegmentIdx], &host_colours[startSegmentIdx], sizeof(int) * Nsegment, cudaMemcpyHostToDevice, streams[s]), "Memcpy3");
+
+        catchCudaError(cudaMemcpyAsync(&device_conflicts[startSegmentIdx], &host_conflicts[startSegmentIdx], sizeof(bool) * Nsegment, cudaMemcpyHostToDevice, streams[s]), "Memcpy4");
+
+        // Timer
+        cudaEvent_t device_start, device_end;
+        catchCudaError(cudaEventCreate(&device_start), "Event Create");
+        catchCudaError(cudaEventCreate(&device_end), "Event Create");
+        catchCudaError(cudaEventRecord(device_start), "Event Record");
+
+        /// keep trying to assign colours as long as there are conflicts to detect.
+        do
+        {
+            assignColours(Nsegment, device_neighbours, device_srcPointers, &device_colours[startSegmentIdx], &device_conflicts[startSegmentIdx], maxDegree, streams[s]);
+        } while (detectConflicts(Nsegment, device_neighbours, device_srcPointers, &device_colours[startSegmentIdx], &device_conflicts[startSegmentIdx], streams[s]));
+
+        // Timer
+        catchCudaError(cudaEventRecord(device_end), "Event Record");
+        catchCudaError(cudaEventSynchronize(device_end), "Event Synchronize");
+        catchCudaError(cudaEventElapsedTime(&device_time_taken, device_start, device_end), "Elapsed time");
+
+        // Copy colours to host and return
+        catchCudaError(cudaMemcpyAsync((void **)&host_colours[startSegmentIdx], &device_colours[startSegmentIdx], sizeof(int) * Nsegment, cudaMemcpyDeviceToHost, streams[s]), "Memcpy7");
+    }
+    cudaDeviceSynchronize();
+    /// n. destroy streams
+    // for (unsigned int s = 0; s < numStreams; s++)
+    //     cudaStreamDestroy(streams[s]);
 
     delete[] host_conflicts;
     catchCudaError(cudaFree(device_colours), "Free");
     catchCudaError(cudaFree(device_conflicts), "Free");
+
+    // should free the memory
+    catchCudaError(cudaFreeHost(host_conflicts), "FreeHost1");
+    catchCudaError(cudaFreeHost(host_colours), "FreeHost2");
 
     return host_colours;
 }
